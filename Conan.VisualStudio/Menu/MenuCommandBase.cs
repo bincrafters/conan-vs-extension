@@ -28,9 +28,9 @@ namespace Conan.VisualStudio.Menu
         {
             try
             {
-                await MenuItemCallbackAsync();
+                await MenuItemCallbackAsync().ConfigureAwait(true);
             }
-            catch (Exception exception)
+            catch (NotSupportedException exception)
             {
                 _errorListService.WriteError(exception.ToString());
             }
@@ -41,7 +41,7 @@ namespace Conan.VisualStudio.Menu
             ThreadHelper.JoinableTaskFactory.RunAsync(
                 async delegate
                 {
-                    await CallMenuItemBallbackAsync();
+                    await CallMenuItemBallbackAsync().ConfigureAwait(true);
                 }
             );
         }

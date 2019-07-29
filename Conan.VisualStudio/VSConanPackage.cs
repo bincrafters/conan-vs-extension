@@ -1,5 +1,7 @@
 using System;
+using System.Globalization;
 using System.ComponentModel.Design;
+using System.Diagnostics.Contracts;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -50,20 +52,18 @@ namespace Conan.VisualStudio
         /// </summary>
         protected override async System.Threading.Tasks.Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
         {
-            await base.InitializeAsync(cancellationToken, progress);
+            await base.InitializeAsync(cancellationToken, progress).ConfigureAwait(true);
 
-            _dte = await GetServiceAsync<DTE>();
+            _dte = await GetServiceAsync<DTE>().ConfigureAwait(true);
 
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
-            _solution = await GetServiceAsync<SVsSolution>() as IVsSolution;
-            _solutionBuildManager = await GetServiceAsync<IVsSolutionBuildManager>() as IVsSolutionBuildManager3;
-
-            var serviceProvider = new ServiceProvider((Microsoft.VisualStudio.OLE.Interop.IServiceProvider)_dte);
+            _solution = await GetServiceAsync<SVsSolution>().ConfigureAwait(true) as IVsSolution;
+            _solutionBuildManager = await GetServiceAsync<IVsSolutionBuildManager>().ConfigureAwait(true) as IVsSolutionBuildManager3;
 
             await TaskScheduler.Default;
 
-            var commandService = await GetServiceAsync<IMenuCommandService>();
+            var commandService = await GetServiceAsync<IMenuCommandService>().ConfigureAwait(true);
             _vcProjectService = new VcProjectService();
             _settingsService = new VisualStudioSettingsService(this);
             _errorListService = new ErrorListService();
@@ -78,7 +78,7 @@ namespace Conan.VisualStudio
 
             await TaskScheduler.Default;
 
-            Logger.Initialize(serviceProvider, "Conan");
+            Logger.Initialize(this, "Conan");
 
             await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
 
@@ -101,7 +101,7 @@ namespace Conan.VisualStudio
         }
 
         private async Task<T> GetServiceAsync<T>() where T : class =>
-            await GetServiceAsync(typeof(T)) as T ?? throw new Exception($"Cannot initialize service {typeof(T).FullName}");
+            await GetServiceAsync(typeof(T)).ConfigureAwait(true) as T ?? throw new Exception($"Cannot initialize service {typeof(T).FullName}");
 
         /// <summary>
         /// Use the DTE object to gain access to Solution events
@@ -123,15 +123,15 @@ namespace Conan.VisualStudio
              * according to https://docs.microsoft.com/en-us/dotnet/api/envdte.solutioneventsclass.opened?view=visualstudiosdk-2017
              */
             _solutionEvents.Opened += SolutionEvents_Opened;
-            _solutionEvents.AfterClosing += SolutionEvents_AfterClosing;
-            _solutionEvents.ProjectAdded += SolutionEvents_ProjectAdded;
+            _solutionEvents.AfterClosing += SolutionEventsAfterClosing;
+            _solutionEvents.ProjectAdded += SolutionEventsProjectAdded;
 
             _projectItemEvents = (_dte.Events as EnvDTE80.Events2).ProjectItemsEvents;
-            _projectItemEvents.ItemAdded += SolutionItemEvents_ItemAdded;
-            _projectItemEvents.ItemRenamed += SolutionItemEvents_ItemRenamed;
+            _projectItemEvents.ItemAdded += SolutionItemEventsItemAdded;
+            _projectItemEvents.ItemRenamed += SolutionItemEventsItemRenamed;
 
             _documentEvents = _dte.Events.DocumentEvents;
-            _documentEvents.DocumentSaved += DocumentEvents_DocumentSaved;
+            _documentEvents.DocumentSaved += DocumentEventsDocumentSaved;
 
             if (_solutionBuildManager != null)
                 _solutionBuildManager.AdviseUpdateSolutionEvents3(this, out uint pdwcookie);
@@ -139,28 +139,36 @@ namespace Conan.VisualStudio
 
         public static bool IsConanfile(string name)
         {
-            return (name.ToLower() == "conanfile.txt" || name.ToLower() == "conanfile.py");
+            Contract.Requires(name != null);
+            return (name.ToLower(CultureInfo.CurrentCulture) == "conanfile.txt" ||
+                name.ToLower(CultureInfo.CurrentCulture) == "conanfile.py");
         }
 
-        public void SolutionItemEvents_ItemAdded(ProjectItem ProjectItem)
+        public void SolutionItemEventsItemAdded(ProjectItem ProjectItem)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+
+            Contract.Requires(ProjectItem != null);
 
             if (IsConanfile(ProjectItem.Name))
                 InstallConanDepsIfRequired(ProjectItem.ContainingProject);
         }
 
-        public void SolutionItemEvents_ItemRenamed(ProjectItem ProjectItem, string OldName)
+        public void SolutionItemEventsItemRenamed(ProjectItem ProjectItem, string OldName)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+
+            Contract.Requires(ProjectItem != null);
 
             if (IsConanfile(ProjectItem.Name))
                 InstallConanDepsIfRequired(ProjectItem.ContainingProject);
         }
 
-        public void DocumentEvents_DocumentSaved(Document document)
+        public void DocumentEventsDocumentSaved(Document document)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
+
+            Contract.Requires(document != null);
 
             if (IsConanfile(document.ProjectItem.Name))
                 InstallConanDepsIfRequired(document.ProjectItem.ContainingProject);
@@ -186,21 +194,21 @@ namespace Conan.VisualStudio
             ThreadHelper.JoinableTaskFactory.RunAsync(
                 async delegate
                 {
-                    bool success = await _conanService.InstallAsync(vcProject);
+                    bool success = await _conanService.InstallAsync(vcProject).ConfigureAwait(true);
                     if (success)
                     {
-                        await _conanService.IntegrateAsync(vcProject);
+                        await _conanService.IntegrateAsync(vcProject).ConfigureAwait(true);
                     }
                 }
             );
         }
 
-        private void SolutionEvents_AfterClosing()
+        private void SolutionEventsAfterClosing()
         {
             EnableMenus(false);
         }
 
-        private void SolutionEvents_ProjectAdded(Project project)
+        private void SolutionEventsProjectAdded(Project project)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
