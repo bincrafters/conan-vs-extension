@@ -29,6 +29,7 @@ namespace Conan.VisualStudio
     [ProvideAutoLoad(UIContextGuids80.EmptySolution, PackageAutoLoadFlags.BackgroundLoad)]
     [ProvideOptionPage(typeof(ConanOptionsPage), "Conan", "Main", 0, 0, true)]
     [ProvideAppCommandLine(_cliSwitch, typeof(VSConanPackage), Arguments = "0", DemandLoad = 1, PackageGuid = PackageGuids.guidVSConanPackageString)]
+    [ProvideAppCommandLine(CLISwitchRunInstall.Name, typeof(VSConanPackage), Arguments = "1", DemandLoad = 1)]
     public sealed class VSConanPackage : AsyncPackage, IVsUpdateSolutionEvents3
     {
         private const string _cliSwitch = "ConanVisualStudioVersion";
@@ -37,6 +38,7 @@ namespace Conan.VisualStudio
         private ConanOptions _conanOptions;
         private ConanAbout _conanAbout;
         private DTE _dte;
+        private CLISwitchRunInstall _cliSwitchRunInstall;
         private SolutionEvents _solutionEvents;
         private IVsSolution _solution;
         private ISettingsService _settingsService;
@@ -96,6 +98,14 @@ namespace Conan.VisualStudio
             EnableMenus(_dte.Solution != null && _dte.Solution.IsOpen);
 
             await TaskScheduler.Default;
+
+            // Command linee switch: ConanRunInstall
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+            ErrorHandler.ThrowOnFailure(cmdLine.GetOption(CLISwitchRunInstall.Name, out int hasMySwitch, out string pathToConan));
+            if (hasMySwitch == 1)
+            {
+                _cliSwitchRunInstall = new CLISwitchRunInstall(_dte, _solutionBuildManager, _vcProjectService, _conanService, pathToConan);
+            }
         }
 
         private void ShowOptionPage()
@@ -195,7 +205,7 @@ namespace Conan.VisualStudio
             ThreadHelper.JoinableTaskFactory.RunAsync(
                 async delegate
                 {
-                    bool success = await _conanService.InstallAsync(vcProject);
+                    bool success = await _conanService.InstallAsync(vcProject, null);
                     if (success)
                     {
                         await _conanService.IntegrateAsync(vcProject);
@@ -236,7 +246,9 @@ namespace Conan.VisualStudio
                 foreach (Project project in _dte.Solution.Projects)
                 {
                     if (_vcProjectService.IsConanProject(project))
+                    {
                         InstallConanDeps(_vcProjectService.AsVCProject(project));
+                    }
                 }
             }
         }

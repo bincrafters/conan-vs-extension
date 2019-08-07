@@ -8,15 +8,16 @@ else
 {
     $visualStudioInstallation = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VSSDK -property installationPath
     $devenv = Join-Path $visualStudioInstallation 'Common7\IDE\devenv.com'
+    $vcvars64 = Join-Path $visualStudioInstallation 'VC\Auxiliary\Build\vcvars64.bat'
 }
 
 Write-Host "devenv: $devenv"
 
-$ntimes = 5
+$ntimes = 1
 For ($i=1; $i -le $ntimes; $i++) {  # Run 10 times
     $output = . "$devenv" /ConanVisualStudioVersion /?
 
-    $pattern = "^${env:APPVEYOR_BUILD_VERSION}\s+Microsoft Visual Studio"  # Version + output from /? command
+    $pattern = "^${env:APPVEYOR_BUILD_VERSION}"  # Version + output from /? command
     $regex = New-Object System.Text.RegularExpressions.Regex $pattern
     $result = $regex.Matches($output)
 
@@ -33,10 +34,20 @@ For ($i=1; $i -le $ntimes; $i++) {  # Run 10 times
     else {
         "OK" | Write-Host -ForegroundColor Green
         $host.SetShouldExit(0)
-        exit
     }
 }
 
-"FAILURE: Should never get here!" | Write-Host -ForegroundColor Red
-$host.SetShouldExit(-1)
-exit
+. "$vcvars64"
+
+$pathConan = Get-Command conan.exe | Select-Object -ExpandProperty Definition
+Write-Host "path to Conan: $pathConan"
+
+$sln_file = "C:\projects\conan-vs-extension\Conan.VisualStudio.Examples\ExampleCLI\ExampleCLI.sln"
+Write-Host "sln_file: $sln_file"
+
+$process = (Start-Process -FilePath "$devenv" -ArgumentList "$sln_file /ConanVisualStudioVersion /ConanRunInstall conan /Build Release|x64" -Wait -PassThru)
+Write-Host "ConanRunInstall finished with return code: " $process.ExitCode
+
+
+#$output = . "$devenv" /ConanRunInstall "conan" /Build "Release|x64" "$sln_file"
+#Write-Host "Output from 'test': $output"
