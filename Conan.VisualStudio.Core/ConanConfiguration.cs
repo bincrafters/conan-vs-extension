@@ -9,6 +9,7 @@ namespace Conan.VisualStudio.Core
         public string CompilerVersion { get; set; }
         public string InstallPath { get; set; }
         public string RuntimeLibrary { get; set; }
+        public string CppStd { get; set; }
 
         public override string ToString()
         {
@@ -18,6 +19,8 @@ namespace Conan.VisualStudio.Core
                            $"compiler version: {CompilerVersion};";
             if (RuntimeLibrary != null)
                 value += $", runtime library: {RuntimeLibrary}";
+            if (CppStd != null)
+                value += $", compiler cppstd: {CppStd}";
             return value;
         }
     }

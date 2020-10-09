@@ -33,6 +33,53 @@ namespace Conan.VisualStudio.VCProjectWrapper
             }
         }
 
+        private static string LanguageStandardToCppStd(string LanguageStandard)
+        {
+            switch (LanguageStandard?.ToLower())
+            {
+                case "stdcpplatest":
+                    return "20";
+                case "stdcpp17":
+                    return "17";
+                case "stdcpp14":
+                    return "14";
+                case "default":
+                case null:
+                    return null;
+                default:
+                    throw new NotSupportedException(
+                        $"Language Standard {LanguageStandard} is not supported by the Conan plugin");
+            }
+        }
+
+        private string GetEvaluatedPropertyValueFromTool(string propertyName, string toolName)
+        {
+            var properties = _configuration.Tools.Item(toolName) as IVCRulePropertyStorage;
+
+            try
+            {
+                return properties?.GetEvaluatedPropertyValue(propertyName);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        private string GetEvaluatedPropertyValueFromRule(string propertyName, string ruleName)
+        {
+            var properties = _configuration.Rules.Item(ruleName) as IVCRulePropertyStorage;
+
+            try
+            {
+                return properties?.GetEvaluatedPropertyValue(propertyName);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         public string ProjectDirectory => _configuration.project.ProjectDirectory;
 
         public string ProjectName => _configuration.project.Name;
@@ -58,6 +105,32 @@ namespace Conan.VisualStudio.VCProjectWrapper
             {
                 IVCRulePropertyStorage generalSettings = _configuration.Rules.Item("ConfigurationGeneral");
                 return generalSettings.GetEvaluatedPropertyValue("PlatformToolset");
+            }
+        }
+
+        public string CppStd
+        {
+            get
+            {
+                var LanguageStandard = GetEvaluatedPropertyValueFromTool("LanguageStandard",
+                    "VCCLCompilerTool");
+
+                if (LanguageStandard != null)
+                {
+                    return LanguageStandardToCppStd(LanguageStandard);
+                }
+
+                LanguageStandard = GetEvaluatedPropertyValueFromRule("LanguageStandard", "CL");
+
+                if (LanguageStandard != null)
+                {
+                    return LanguageStandardToCppStd(LanguageStandard);
+                }
+
+                LanguageStandard = GetEvaluatedPropertyValueFromRule("LanguageStandard",
+                    "ConfigurationGeneral");
+
+                return LanguageStandardToCppStd(LanguageStandard);
             }
         }
 
