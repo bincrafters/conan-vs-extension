@@ -6,6 +6,11 @@ using System.Threading.Tasks;
 using Conan.VisualStudio.Core;
 using Conan.VisualStudio.Core.VCInterfaces;
 using Microsoft.VisualStudio.Threading;
+using Microsoft.VisualStudio.Shell;
+using Microsoft.VisualStudio.Shell.Interop;
+using System.Collections.Generic;
+using System.Windows.Forms;
+using EnvDTE;
 
 namespace Conan.VisualStudio.Services
 {
@@ -14,12 +19,20 @@ namespace Conan.VisualStudio.Services
         private readonly ISettingsService _settingsService;
         private readonly IErrorListService _errorListService;
         private readonly IVcProjectService _vcProjectService;
+        private readonly IVsSolution4 _solution;
+        private readonly DTE _dte;
+        private List<string> _refreshingProjects;
 
-        public ConanService(ISettingsService settingsService, Core.IErrorListService errorListService, IVcProjectService vcProjectService)
+        List<string> IConanService.RefreshingProjects => _refreshingProjects;
+
+        public ConanService(ISettingsService settingsService, Core.IErrorListService errorListService, IVcProjectService vcProjectService, IVsSolution4 solution, DTE dte)
         {
             _settingsService = settingsService;
             _errorListService = errorListService;
             _vcProjectService = vcProjectService;
+            _solution = solution;
+            _refreshingProjects = new List<string>();
+            _dte = dte;
         }
 
         private string GetPropsFilePath(IVCConfiguration configuration)
@@ -34,29 +47,58 @@ namespace Conan.VisualStudio.Services
         }
 
 
-        private void IntegrateIntoConfiguration(IVCConfiguration configuration)
+        private void IntegrateIntoConfiguration(IVCConfiguration configuration, IVsSolution4 solution, ref IVCProject vcProject)
         {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            string projectName = configuration.ProjectName;
+            string projectFullName = Path.Combine(configuration.ProjectDirectory, configuration.ProjectFileName);
             string absPropFilePath = GetPropsFilePath(configuration);
             string relativePropFilePath = ConanPathHelper.GetRelativePath(configuration.ProjectDirectory, absPropFilePath);
 
             configuration.AdditionalDependencies = configuration.AdditionalDependencies.Replace("$(NOINHERIT)", "");
 
-            foreach (IVCPropertySheet sheet in configuration.PropertySheets)
+            bool bPropPresent = configuration.IsPropertySheetPresent(relativePropFilePath);
+            if (!bPropPresent)
             {
-                if (ConanPathHelper.NormalizePath(sheet.PropertySheetFile) == ConanPathHelper.NormalizePath(absPropFilePath))
+                Guid guid = new Guid(vcProject.Guid);
+                string vcProjectFullPath = vcProject.FullPath;
+                _refreshingProjects.Add(vcProjectFullPath);
+                solution.UnloadProject(guid, (uint)_VSProjectUnloadStatus.UNLOADSTATUS_UnloadedByUser);
+                //From this point, vcProject and configuration properties that use it are no more valid
+                configuration.AddPropertySheet(relativePropFilePath, vcProjectFullPath);
+                solution.ReloadProject(guid);
+                //Recreate vcProject
+                foreach (Project project in _dte.Solution.Projects)
                 {
-                    string msg = $"[Conan.VisualStudio] Property sheet '{absPropFilePath}' already added to project {configuration.ProjectName}";
-                    Logger.Log(msg);
-                    return;
+                    if (project.FullName == projectFullName)
+                    {
+                        vcProject = _vcProjectService.AsVCProject(project);
+                    }
                 }
+
+                Logger.Log($"[Conan.VisualStudio] Property sheet '{absPropFilePath}' added (or updated) to project {projectName}");
             }
-            configuration.AddPropertySheet(relativePropFilePath);
-            Logger.Log($"[Conan.VisualStudio] Property sheet '{absPropFilePath}' added to project {configuration.ProjectName}");
-            configuration.CollectIntelliSenseInfo();
+            else
+            {
+                Logger.Log($"[Conan.VisualStudio] Property sheet '{absPropFilePath}' already added to project {projectName}");
+                configuration.CollectIntelliSenseInfo();
+            }
         }
 
-        public async Task IntegrateAsync(IVCProject vcProject)
+        public async System.Threading.Tasks.Task IntegrateAsync(IVCProject vcProject)
         {
+            if(!vcProject.Saved)
+            {
+                DialogResult res = MessageBox.Show(
+                    "Project must be saved to finish conan install. Do you want to save it? If you choose 'No' it will not be saved and conan install could be unsuccessful for this session.",
+                    "Save project?", MessageBoxButtons.YesNo, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1);
+
+                if (res == DialogResult.No)
+                    return;
+
+                vcProject.Save();
+            }
             var projectDirectory = vcProject.ProjectDirectory;
             var conanfileDirectory = await ConanPathHelper.GetNearestConanfilePathAsync(projectDirectory);
             if (conanfileDirectory == null)
@@ -65,15 +107,19 @@ namespace Conan.VisualStudio.Services
                 return;
             }
 
+            await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
             if (_settingsService.GetConanInstallOnlyActiveConfiguration())
             {
-                IntegrateIntoConfiguration(vcProject.ActiveConfiguration);
+                IntegrateIntoConfiguration(vcProject.ActiveConfiguration, _solution, ref vcProject);
             }
             else
             {
-                foreach (IVCConfiguration configuration in vcProject.Configurations)
+                //foreach is not possible here since vcProject could be reinitialized during IntegrateIntoConfiguration
+                int nNbConfigurations = vcProject.Configurations.Count;
+                for (int i = 0; i < nNbConfigurations; i++)
                 {
-                    IntegrateIntoConfiguration(configuration);
+                    IVCConfiguration configuration = vcProject.Configurations[i];
+                    IntegrateIntoConfiguration(configuration, _solution, ref vcProject);
                 }
             }
         }
@@ -105,7 +151,7 @@ namespace Conan.VisualStudio.Services
             foreach (var configuration in project.Configurations)
             {
                 var installPath = configuration.InstallPath;
-                await Task.Run(() => Directory.CreateDirectory(installPath));
+                await System.Threading.Tasks.Task.Run(() => Directory.CreateDirectory(installPath));
                 var logFilePath = Path.Combine(installPath, $"conan_{Guid.NewGuid().ToString()}.log");
 
                 using (var logFile = File.Open(logFilePath, FileMode.Create, FileAccess.Write, FileShare.Read))
